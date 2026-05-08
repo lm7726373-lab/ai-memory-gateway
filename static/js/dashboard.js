@@ -470,12 +470,11 @@ async function restoreMem(id) {
 }
 
 async function batchSave() {
-    const rows = document.querySelectorAll('#tbody tr');
-    if (rows.length === 0) { showManageMsg('error', '没有记忆可保存'); return; }
+    const checked = [...document.querySelectorAll('.mem-check:checked')].map(c => parseInt(c.value));
+    if (checked.length === 0) { showManageMsg('error', '请先勾选要保存的记忆'); return; }
     
     const updates = [];
-    rows.forEach(row => {
-        const id = parseInt(row.dataset.id);
+    checked.forEach(id => {
         const cEl = document.getElementById('c_' + id);
         const iEl = document.getElementById('i_' + id);
         const tEl = document.getElementById('t_' + id);
@@ -491,7 +490,7 @@ async function batchSave() {
         }
     });
     
-    if (!confirm('确定保存全部 ' + updates.length + ' 条记忆的修改？')) return;
+    if (!confirm('确定保存选中的 ' + updates.length + ' 条记忆的修改？')) return;
     try {
         const resp = await fetch('/api/memories/batch-update', {
             method: 'POST',
