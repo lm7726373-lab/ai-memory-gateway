@@ -580,7 +580,7 @@ async def build_partitioned_messages(
     a_start_round = state['a_start_round']
     
     if total_rounds < X:
-        return await _build_basic_cached(history, base_prompt, user_message, current_user_msg)
+        return await _build_basic_cached(history, base_prompt, user_message, current_user_msg, summary_parts)
     
     # 计算A/B区（按逻辑轮切片）
     a_end_round = a_start_round + X
@@ -692,14 +692,28 @@ async def _build_basic_cached(
     base_prompt: str,
     user_message: str,
     current_user_msg: dict,
+    summary_parts: list = None,
 ) -> list:
     """基础版prompt caching（历史不够分区时的降级模式）"""
+    summary_parts = summary_parts or []
     result = []
     if base_prompt:
         result.append({
             "role": "system",
             "content": [{"type": "text", "text": base_prompt, "cache_control": {"type": "ephemeral"}}]
         })
+
+    # 新建/继承的对话线在历史不足 X 轮时也必须读到继承摘要。
+    # 否则 dashboard 和 DB 都显示摘要存在，但首轮请求不会注入。
+    if summary_parts:
+        blocks = [{"type": "text", "text": "[以下是之前对话的摘要，帮助你回忆上下文]"}]
+        for i, part in enumerate(summary_parts):
+            item = {"type": "text", "text": part}
+            if i == len(summary_parts) - 1:
+                item["cache_control"] = {"type": "ephemeral"}
+            blocks.append(item)
+        result.append({"role": "user", "content": blocks})
+        result.append({"role": "assistant", "content": "好的，我已了解之前的对话内容。"})
     
     h_cleaned = [{k: v for k, v in msg.items() if k not in ('created_at',)} for msg in history]
     
@@ -729,8 +743,9 @@ async def _build_basic_cached(
         parts.append(current_text)
         result.append({"role": "user", "content": "\n\n".join(parts)})
     
-    bp_count = 1 + (1 if history else 0)
-    print(f"🔒 基础缓存(降级): BP×{bp_count} | 历史{len(history)}条 | 总{len(result)}条messages")
+    summary_total = sum(len(p) for p in summary_parts)
+    bp_count = 1 + (1 if summary_parts else 0) + (1 if history else 0)
+    print(f"🔒 基础缓存(降级): BP×{bp_count} | 摘要{'有' if summary_parts else '无'}({len(summary_parts)}段/{summary_total}字) | 历史{len(history)}条 | 总{len(result)}条messages")
     return result
 
 
