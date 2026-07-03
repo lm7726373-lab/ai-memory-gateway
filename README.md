@@ -147,7 +147,7 @@ Give your AI long-term memory. A lightweight proxy gateway that adds a memory la
 | 环境变量 | 说明 | 示例 |
 |---------|------|------|
 | `CACHE_PARTITION_ENABLED` | 分区缓存开关 | `true` |
-| `CACHE_PARTITION_X` | 轮转周期（轮数）。1轮 = 一次用户发言 + AI回复。设为2时，最早的2轮会在其后又积累了2轮新对话时才被压缩成摘要（即大约第5次发言时首次触发），不是聊2句就生成 | `15` |
+| `CACHE_PARTITION_X` | 轮转周期（轮数） | `15` |
 | `CACHE_SUMMARY_MODEL` | 摘要模型。**留空 = 不生成摘要**，轮转时旧消息直接滑出上下文（纯轮转模式）。从旧版本升级的用户注意：旧版此项有默认模型，新版默认为空，需要摘要请显式配置。不建议使用推理模型（思考可能耗尽输出token导致摘要为空） | 空 |
 | `PARTITION_SESSION_ID` | 固定的 session ID | `my-thread` |
 | `CACHE_PARTITION_TRIGGER`（可选） | 轮转触发方式：`rounds`（按轮次，默认）或 `time`（按时间窗口，适合微信等消息频率高的场景） | `rounds` |
