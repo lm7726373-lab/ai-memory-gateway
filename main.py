@@ -407,6 +407,29 @@ def _strip_cache_control(messages: list):
         print(f"🔧 兼容性处理: 剥离了 {stripped} 个 cache_control 字段（非 Claude 模型）")
 
 
+def _assemble_current_user_message(parts: list, raw_content) -> dict:
+    """
+    组装当前轮 user 消息：注入文本（时间/记忆，parts）+ 客户端原始 content。
+    content 为多模态数组时保留图片等非文本块，只把文本块并进注入文本，
+    否则 image_url 块会在拼接时被丢弃，模型永远看不到图。
+    """
+    if isinstance(raw_content, list):
+        media_blocks = [
+            b for b in raw_content
+            if not (isinstance(b, dict) and b.get("type") == "text")
+        ]
+        text_joined = " ".join(
+            b.get("text", "") for b in raw_content
+            if isinstance(b, dict) and b.get("type") == "text"
+        )
+        if media_blocks:
+            merged = "\n\n".join(parts + ([text_joined] if text_joined else []))
+            return {"role": "user", "content": media_blocks + [{"type": "text", "text": merged}]}
+        raw_content = text_joined
+    parts.append(raw_content)
+    return {"role": "user", "content": "\n\n".join(parts)}
+
+
 def _message_text(message: dict) -> str:
     """Extract text from an OpenAI-compatible message."""
     content = message.get("content", "")
@@ -772,16 +795,8 @@ async def build_partitioned_messages(
             if mem_text:
                 parts.append(mem_text)
         
-        current_text = current_user_msg['content']
-        if isinstance(current_text, list):
-            current_text = " ".join(
-                item.get("text", "") for item in current_text
-                if isinstance(item, dict) and item.get("type") == "text"
-            )
-        
-        parts.append(current_text)
-        result.append({"role": "user", "content": "\n\n".join(parts)})
-    
+        result.append(_assemble_current_user_message(parts, current_user_msg['content']))
+
     bp_count = 1 + (1 if summary_parts else 0) + (1 if cleaned_a else 0) + (1 if b_msgs else 0)
     summary_total = sum(len(p) for p in summary_parts)
     tool_stripped = len(a_msgs) - len(cleaned_a)
@@ -836,16 +851,8 @@ async def _build_basic_cached(
             if mem_text:
                 parts.append(mem_text)
         
-        current_text = current_user_msg['content']
-        if isinstance(current_text, list):
-            current_text = " ".join(
-                item.get("text", "") for item in current_text
-                if isinstance(item, dict) and item.get("type") == "text"
-            )
-        
-        parts.append(current_text)
-        result.append({"role": "user", "content": "\n\n".join(parts)})
-    
+        result.append(_assemble_current_user_message(parts, current_user_msg['content']))
+
     summary_total = sum(len(p) for p in summary_parts)
     bp_count = 1 + (1 if summary_parts else 0) + (1 if history else 0)
     print(f"🔒 基础缓存(降级): BP×{bp_count} | 摘要{'有' if summary_parts else '无'}({len(summary_parts)}段/{summary_total}字) | 历史{len(history)}条 | 总{len(result)}条messages")
