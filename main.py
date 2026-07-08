@@ -1168,13 +1168,23 @@ async def _chat_completions_inner(request: Request):
         client_new_msgs = [m for m in messages if m.get("role") != "system"]
         # 分区模式下，assistant消息来自上一轮response（DB里已存），过滤掉避免重复
         client_new_msgs = [m for m in client_new_msgs if m.get("role") != "assistant"]
-        # 分区模式下DB已有完整历史，客户端发来的旧user是冗余的，只保留最后一条
+        # 分区模式下DB已有完整历史，客户端发来的旧user是冗余的。
+        # 但有些客户端把图片和文字拆成多条连续的user发送（图在前文字在后），
+        # 只留最后一条会把图那条当冗余丢掉（图片不入库，DB里也找不回来）。
+        # 所以按原始消息顺序保留"末尾连续的user块"：历史冗余user总是被assistant隔开，不会混入。
+        tail_user_ids = set()
+        for m in reversed([m for m in messages if m.get("role") != "system"]):
+            if m.get("role") == "user":
+                tail_user_ids.add(id(m))
+            else:
+                break
         user_msgs = [m for m in client_new_msgs if m.get("role") == "user"]
-        if len(user_msgs) > 1:
-            last_user = user_msgs[-1]
-            client_new_msgs = [m for m in client_new_msgs if m.get("role") != "user"]
-            client_new_msgs.append(last_user)
-            print(f"🔧 去重: 过滤{len(user_msgs)-1}条冗余user，保留最后1条")
+        if len(user_msgs) > len(tail_user_ids):
+            client_new_msgs = [
+                m for m in client_new_msgs
+                if m.get("role") != "user" or id(m) in tail_user_ids
+            ]
+            print(f"🔧 去重: 过滤{len(user_msgs)-len(tail_user_ids)}条冗余user，保留末尾连续{len(tail_user_ids)}条")
         # 工具结果轮次处理：基于DB状态 + 当前轮次tool_call_id精确判断
         client_tools = [m for m in client_new_msgs if m.get("role") == "tool"]
         if client_tools:
@@ -1198,11 +1208,9 @@ async def _chat_completions_inner(request: Request):
                 if new_tools:
                     print(f"🔧 保留{len(new_tools)}条当前轮次tool (ids: {[m.get('tool_call_id','?') for m in new_tools]})")
                 
-                # 重建 client_new_msgs
-                last_msg = client_new_msgs[-1] if client_new_msgs else None
-                client_new_msgs = new_tools[:]
-                if last_msg and last_msg.get("role") == "user":
-                    client_new_msgs.append(last_msg)
+                # 重建 client_new_msgs（user此时已只剩末尾连续块，全部保回，别把拆条发送的图丢了）
+                tail_users = [m for m in client_new_msgs if m.get("role") == "user"]
+                client_new_msgs = new_tools[:] + tail_users
                 
                 if new_tools:
                     # Race condition 防护：DB的assistant(tool_calls)已确认存在（db_expecting_tool=True），
