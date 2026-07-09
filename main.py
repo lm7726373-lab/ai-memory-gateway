@@ -1211,9 +1211,8 @@ async def _chat_completions_inner(request: Request):
             if has_self_contained_tool_call:
                 # 信任客户端发来的完整上下文，保留所有 tool，直接跳过数据库检查
                 print(f"🔧 自包含工具调用上下文，保留 {len(client_tools)} 条 tool")
-                # 保留 user 消息（避免图片等被丢弃）
-                tail_users = [m for m in client_new_msgs if m.get("role") == "user"]
-                client_new_msgs = client_tools[:] + tail_users
+                # client_new_msgs 已包含 assistant + tool + user，无需重建，直接跳过后续去重逻辑
+                pass
             else:
                 # 判断DB是否处于"等待tool结果"状态（最后一条是assistant(tool_calls)）
                 db_last = db_msgs[-1] if db_msgs else None
