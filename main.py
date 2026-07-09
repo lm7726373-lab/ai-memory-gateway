@@ -1175,9 +1175,9 @@ async def _chat_completions_inner(request: Request):
                     filtered_assistant.append(m)
                     continue
                 # 否则跳过（DB历史已有）
-        else:
-            filtered_assistant.append(m)
-     client_new_msgs = filtered_assistant
+            else:
+                filtered_assistant.append(m)
+        client_new_msgs = filtered_assistant
         # 分区模式下DB已有完整历史，客户端发来的旧user是冗余的。
         # 但有些客户端把图片和文字拆成多条连续的user发送（图在前文字在后），
         # 只留最后一条会把图那条当冗余丢掉（图片不入库，DB里也找不回来）。
@@ -1354,6 +1354,7 @@ async def _chat_completions_inner(request: Request):
                                                     tool_messages=tool_messages, assistant_tool_calls=assistant_tool_calls,
                                                     assistant_reasoning=assistant_reasoning)
                     )
+                resp_data["session_id"] = session_id
                 
                 return JSONResponse(status_code=200, content=resp_data)
             else:
@@ -1371,7 +1372,9 @@ async def stream_and_capture(headers: dict, body: dict, session_id: str, user_me
     stream_usage = {}
     line_buffer = ""
     accumulated_tool_calls = {}  # index -> {id, type, function: {name, arguments}}
-    
+
+    # 在流的最开始，把 session_id 作为 SSE 事件发给前端
+    yield f"data: {{\"session_id\": \"{session_id}\"}}\n\n".encode("utf-8")
     async with httpx.AsyncClient(timeout=300) as client:
         async with client.stream("POST", API_BASE_URL, headers=headers, json=body) as response:
             # 打印上游响应头（排查thinking问题用）
