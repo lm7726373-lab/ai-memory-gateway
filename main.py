@@ -1198,49 +1198,66 @@ async def _chat_completions_inner(request: Request):
         # 工具结果轮次处理：基于DB状态 + 当前轮次tool_call_id精确判断
         client_tools = [m for m in client_new_msgs if m.get("role") == "tool"]
         if client_tools:
-            # 判断DB是否处于"等待tool结果"状态（最后一条是assistant(tool_calls)）
-            db_last = db_msgs[-1] if db_msgs else None
-            db_expecting_tool = (db_last and db_last.get("role") == "assistant" and db_last.get("tool_calls"))
-            
-            if not db_expecting_tool:
-                # DB不在等待tool结果 → 客户端的所有tool都是历史残留（含手动删除后的幽灵）
-                stale_ids = [m.get('tool_call_id', '?') for m in client_tools]
-                print(f"🔧 去重: DB未在等待tool结果，丢弃{len(client_tools)}条客户端tool (ids: {stale_ids})")
-                client_new_msgs = [m for m in client_new_msgs if m.get("role") != "tool"]
-            else:
-                # DB在等待tool → 只保留匹配当前轮次assistant(tool_calls)的tool
-                expected_tool_ids = {tc.get("id") for tc in db_last.get("tool_calls", []) if tc.get("id")}
-                new_tools = [m for m in client_tools if m.get("tool_call_id") in expected_tool_ids]
-                stale_tools = [m for m in client_tools if m.get("tool_call_id") not in expected_tool_ids]
-                
-                if stale_tools:
-                    print(f"🔧 去重: 丢弃{len(stale_tools)}条非当前轮次tool (ids: {[m.get('tool_call_id','?') for m in stale_tools]})")
-                if new_tools:
-                    print(f"🔧 保留{len(new_tools)}条当前轮次tool (ids: {[m.get('tool_call_id','?') for m in new_tools]})")
-                
-                # 重建 client_new_msgs（user此时已只剩末尾连续块，全部保回，别把拆条发送的图丢了）
+            # 检查当前请求是否自带完整的工具调用上下文（assistant + tool）
+            has_self_contained_tool_call = False
+            for m in messages:  # 原始请求的 messages
+                if m.get("role") == "assistant" and m.get("tool_calls"):
+                    tc_ids = {tc.get("id") for tc in m["tool_calls"] if tc.get("id")}
+                    client_tool_ids = {tm.get("tool_call_id") for tm in client_tools if tm.get("tool_call_id")}
+                    if tc_ids & client_tool_ids:
+                        has_self_contained_tool_call = True
+                        break
+    
+            if has_self_contained_tool_call:
+                # 信任客户端发来的完整上下文，保留所有 tool，直接跳过数据库检查
+                print(f"🔧 自包含工具调用上下文，保留 {len(client_tools)} 条 tool")
+                # 保留 user 消息（避免图片等被丢弃）
                 tail_users = [m for m in client_new_msgs if m.get("role") == "user"]
-                client_new_msgs = new_tools[:] + tail_users
-                
-                if new_tools:
-                    # Race condition 防护：DB的assistant(tool_calls)已确认存在（db_expecting_tool=True），
-                    # 但仍需检查是否被其他并发请求意外清除
-                    new_tool_ids = {m.get("tool_call_id") for m in new_tools if m.get("tool_call_id")}
-                    db_has_matching_ast = False
-                    for m in db_msgs:
-                        if m.get("role") == "assistant" and m.get("tool_calls"):
-                            ast_tc_ids = {tc.get("id") for tc in m["tool_calls"] if tc.get("id")}
-                            if new_tool_ids & ast_tc_ids:
-                                db_has_matching_ast = True
-                                break
-                    if not db_has_matching_ast and new_tool_ids:
-                        for m in messages:
+                client_new_msgs = client_tools[:] + tail_users
+            else:
+                # 判断DB是否处于"等待tool结果"状态（最后一条是assistant(tool_calls)）
+                db_last = db_msgs[-1] if db_msgs else None
+                db_expecting_tool = (db_last and db_last.get("role") == "assistant" and db_last.get("tool_calls"))
+        
+                if not db_expecting_tool:
+                    # DB不在等待tool结果 → 客户端的所有tool都是历史残留（含手动删除后的幽灵）
+                    stale_ids = [m.get('tool_call_id', '?') for m in client_tools]
+                    print(f"🔧 去重: DB未在等待tool结果，丢弃{len(client_tools)}条客户端tool (ids: {stale_ids})")
+                    client_new_msgs = [m for m in client_new_msgs if m.get("role") != "tool"]
+                else:
+                    # DB在等待tool → 只保留匹配当前轮次assistant(tool_calls)的tool
+                    expected_tool_ids = {tc.get("id") for tc in db_last.get("tool_calls", []) if tc.get("id")}
+                    new_tools = [m for m in client_tools if m.get("tool_call_id") in expected_tool_ids]
+                    stale_tools = [m for m in client_tools if m.get("tool_call_id") not in expected_tool_ids]
+            
+                    if stale_tools:
+                        print(f"🔧 去重: 丢弃{len(stale_tools)}条非当前轮次tool (ids: {[m.get('tool_call_id','?') for m in stale_tools]})")
+                    if new_tools:
+                        print(f"🔧 保留{len(new_tools)}条当前轮次tool (ids: {[m.get('tool_call_id','?') for m in new_tools]})")
+            
+                    # 重建 client_new_msgs（user此时已只剩末尾连续块，全部保回，别把拆条发送的图丢了）
+                    tail_users = [m for m in client_new_msgs if m.get("role") == "user"]
+                    client_new_msgs = new_tools[:] + tail_users
+            
+                    if new_tools:
+                        # Race condition 防护：DB的assistant(tool_calls)已确认存在（db_expecting_tool=True），
+                        # 但仍需检查是否被其他并发请求意外清除
+                        new_tool_ids = {m.get("tool_call_id") for m in new_tools if m.get("tool_call_id")}
+                        db_has_matching_ast = False
+                        for m in db_msgs:
                             if m.get("role") == "assistant" and m.get("tool_calls"):
                                 ast_tc_ids = {tc.get("id") for tc in m["tool_calls"] if tc.get("id")}
                                 if new_tool_ids & ast_tc_ids:
-                                    client_new_msgs.insert(0, m)
-                                    print(f"⚠️ Race防护: 从客户端补充assistant(tool_calls)")
+                                    db_has_matching_ast = True
                                     break
+                        if not db_has_matching_ast and new_tool_ids:
+                            for m in messages:
+                                if m.get("role") == "assistant" and m.get("tool_calls"):
+                                    ast_tc_ids = {tc.get("id") for tc in m["tool_calls"] if tc.get("id")}
+                                    if new_tool_ids & ast_tc_ids:
+                                        client_new_msgs.insert(0, m)
+                                        print(f"⚠️ Race防护: 从客户端补充assistant(tool_calls)")
+                                        break
         all_msgs = db_msgs + client_new_msgs
         
         # 同步更新tool_messages，避免process_memories_background存重复的旧tool
