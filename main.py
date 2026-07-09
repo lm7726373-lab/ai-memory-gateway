@@ -1166,8 +1166,18 @@ async def _chat_completions_inner(request: Request):
         
         # 提取客户端新消息（非system），可能是user、tool、或带tool_calls的assistant
         client_new_msgs = [m for m in messages if m.get("role") != "system"]
-        # 分区模式下，assistant消息来自上一轮response（DB里已存），过滤掉避免重复
-        client_new_msgs = [m for m in client_new_msgs if m.get("role") != "assistant"]
+        # 修复：如果是工具调用轮次，必须保留 assistant(tool_calls)
+        filtered_assistant = []
+        for m in client_new_msgs:
+            if m.get("role") == "assistant":
+                # 如果带 tool_calls 且当前请求中有 tool 结果，则保留
+                if m.get("tool_calls") and any(msg.get("role") == "tool" for msg in messages):
+                    filtered_assistant.append(m)
+                    continue
+                # 否则跳过（DB历史已有）
+        else:
+            filtered_assistant.append(m)
+     client_new_msgs = filtered_assistant
         # 分区模式下DB已有完整历史，客户端发来的旧user是冗余的。
         # 但有些客户端把图片和文字拆成多条连续的user发送（图在前文字在后），
         # 只留最后一条会把图那条当冗余丢掉（图片不入库，DB里也找不回来）。
