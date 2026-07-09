@@ -1144,7 +1144,7 @@ async def _chat_completions_inner(request: Request):
         print(f"🔧 检测到 {len(tool_messages)} 条工具结果消息")
     
     # ---------- 生成 session ID ----------
-    session_id = str(uuid.uuid4())[:8]
+    session_id = body.get("session_id") or str(uuid.uuid4())[:8]
     
     # ---------- 分区缓存模式 ----------
     if CACHE_PARTITION_ENABLED and not skip_conversation_log:
